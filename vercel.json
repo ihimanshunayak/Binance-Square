@@ -4,5 +4,11 @@
     "api/**/*.js": {
       "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron-news",
+      "schedule": "30 3 * * *"
+    }
+  ]
 }

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1020">
+  <meta name="description" content="Binance Square MCP server and crypto-news automation status.">
+  <title>Binance Square Automation</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0b1020;--panel:#111a2e;--line:#26344f;--text:#eef3ff;--muted:#9eacc8;--accent:#f0b90b;--ok:#49d49d}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(70rem 35rem at 10% -10%,#1c2c4b 0%,transparent 55%),var(--bg);color:var(--text);font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+    main{width:min(900px,calc(100% - 32px));margin:0 auto;padding:64px 0 40px}.eyebrow{color:var(--accent);font-size:.8rem;font-weight:800;letter-spacing:.16em;text-transform:uppercase}
+    h1{font-size:clamp(2.2rem,6vw,4rem);line-height:1.05;letter-spacing:-.045em;margin:14px 0 18px}.lead{max-width:680px;color:var(--muted);font-size:1.1rem}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin:30px 0}.card{background:rgba(17,26,46,.88);border:1px solid var(--line);border-radius:18px;padding:20px}.card h2{font-size:1.05rem;margin:0 0 8px}.card p{color:var(--muted);margin:0}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);margin-right:8px}
+    .notice{border:1px solid #59491a;background:#211c10;border-radius:14px;padding:16px 18px;color:#f4e5ae;margin:20px 0}.actions{display:flex;gap:12px;flex-wrap:wrap;margin:24px 0}.button{display:inline-block;text-decoration:none;font-weight:700;border-radius:10px;padding:11px 15px;background:var(--accent);color:#151515}.button.secondary{background:transparent;border:1px solid var(--line);color:var(--text)}code{color:#f5cf42}.small{color:var(--muted);font-size:.9rem;margin-top:36px}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">Nayak · Automation Service</div>
+    <h1>Binance Square<br>Automation</h1>
+    <p class="lead">A server-side integration scaffold for approved Binance Square text and image posts, with an optional scheduled CoinDesk crypto-news workflow.</p>
+    <div class="notice"><strong>Live publishing is not automatic by default.</strong> API credentials, MCP secret, and news settings must be configured in Vercel. Scheduled news runs in dry-run mode unless explicitly enabled.</div>
+    <div class="grid">
+      <section class="card"><h2><span class="dot"></span>Health endpoint</h2><p>Check whether the Vercel function is reachable and which environment variables are present (secret values are never returned).</p></section>
+      <section class="card"><h2>MCP publishing</h2><p>Connect a compatible MCP client using the secret endpoint after configuring <code>MCP_SECRET_PATH</code>.</p></section>
+      <section class="card"><h2>News automation</h2><p>Requires a protected cron secret and persistent Redis storage for duplicate-news tracking before live posting.</p></section>
+    </div>
+    <div class="actions">
+      <a class="button" href="/api/health">Check health</a>
+      <a class="button secondary" href="https://github.com/ihimanshunayak/Binance-Square">View source on GitHub</a>
+    </div>
+    <p class="small">Security note: never expose Binance API keys, OpenAI API keys, MCP secrets, or cron secrets in public source code.</p>
+  </main>
+</body>
+</html>

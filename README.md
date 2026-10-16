@@ -1,48 +1,66 @@
 # Binance Square MCP & Crypto News Automation
 
-Node.js project for Binance Square posting with an optional CoinDesk crypto-news workflow.
+Vercel-hosted Node.js MCP server for Binance Square publishing plus optional CoinDesk news drafting/posting.
 
-**Current repository status: Vercel deployment scaffold, not a complete/live publisher yet.** The API routes make the project structure deployable for testing but intentionally do not publish posts until the MCP transport, Binance/OpenAI calls, and persistent news deduplication are ported and verified.
+## What is implemented
 
-## Current files
+- Public landing page at `/`.
+- Safe health endpoint at `/api/health` (reports configuration booleans only; never returns secret values).
+- Stateless Streamable HTTP MCP endpoint at `/api/mcp?secret=<MCP_SECRET_PATH>`.
+- MCP tools:
+  - `post_to_binance_square`: text-only post.
+  - `post_with_image_to_binance_square`: image URL or AI-generated image plus post text.
+- Protected scheduled-news endpoint at `/api/cron-news`.
+- CoinDesk RSS and article extraction, original post drafting, optional generated image, and Redis-backed duplicate tracking.
+- SSRF guard and 8 MB limit for user-supplied image URLs.
 
-- `api/health.js` — Vercel health-check function.
-- `api/mcp.js` — fail-closed placeholder; original MCP Streamable HTTP transport still needs a Vercel adapter.
-- `api/cron-news.js` — protected placeholder for a future Vercel Cron job. It currently returns HTTP 501 and does not publish.
-- `package.json` — original project dependencies.
-- `.env.example` — variable names only; no secrets.
+## Deploy
 
-## Deploy to Vercel
-
-1. Import `ihimanshunayak/Binance-Square` from GitHub at https://vercel.com/new.
-2. Choose the project root and use the Node.js functions defaults.
-3. Add required secrets under Project Settings → Environment Variables. Never commit real credentials.
-4. Deploy, then verify `GET /api/health` returns `{ "ok": true, ... }`.
+1. Import this repository in Vercel: https://vercel.com/new.
+2. Vercel will deploy from `main` when Git integration is connected.
+3. Add the environment variables below in Vercel Project Settings -> Environment Variables, then redeploy.
+4. Open `/api/health` and confirm `ok: true`. This checks runtime/configuration only, not that your external API credentials actually work.
+5. Keep news disabled or in dry-run until you test the generated draft. Do not enable live publishing without deliberately configuring the Binance and OpenAI credentials.
 
 ## Required environment variables
 
-- `BINANCE_SQUARE_API_KEY`
-- `OPENAI_API_KEY`
-- `OPENAI_IMAGE_MODEL` (optional if only using direct image URLs)
-- `OPENAI_TEXT_MODEL` (must be a model enabled for your OpenAI API key)
-- `MCP_SECRET_PATH` (long random secret)
-- `CRON_SECRET` (long random secret for scheduled endpoint)
-- `NEWS_ENABLED` (keep `false` until completed and tested)
-- `NEWS_DRY_RUN` (keep `true` until end-to-end tests pass)
+- `BINANCE_SQUARE_API_KEY`: Binance Square OpenAPI key.
+- `MCP_SECRET_PATH`: a long random secret used as the `secret` query value in the MCP URL.
+- `OPENAI_API_KEY`: required for AI-generated images and news drafts. Text-only manual posts do not need OpenAI.
+- `OPENAI_TEXT_MODEL`: defaults to `gpt-6-luna`; it must be enabled for your API key.
+- `OPENAI_IMAGE_MODEL`: defaults to `gpt-image-2`.
+- `CRON_SECRET`: required for scheduled news requests. Vercel sends this as a Bearer token for Cron invocations.
+- `NEWS_ENABLED`: keep `false` until configured.
+- `NEWS_DRY_RUN`: defaults safely to `true`; set it to `false` only when you want live posts.
+- `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`: required for live news posting so duplicate article IDs persist between Vercel Function invocations.
 
-## Important Vercel limitations
+Optional variables: `NEWS_POSTS_PER_RUN` (1-3, default 1), `NEWS_POST_LANGUAGE` (default English), `NEWS_IMAGE_MODE` (`generate`, `none`, or `source`; default `generate`). Reusing CoinDesk source images requires appropriate reuse rights; generated original art is the default.
 
-The original source uses `app.listen()`, an in-process `node-cron` scheduler, and `posted-news.json`. These are not a reliable Vercel Functions deployment pattern. Vercel Functions are request-driven, so use Vercel Cron or an external scheduler and persist article IDs in Redis or a database. Do not rely on a local file for deduplication.
+## MCP connector URL
 
-## Before live posting
+After setting `MCP_SECRET_PATH` in Vercel, connect your MCP client to:
 
-- Implement the MCP Streamable HTTP transport for Vercel's request/response handler.
-- Port the original Binance post and image-upload logic into serverless-compatible handlers.
-- Implement secure, authenticated cron invocation and persistent deduplication.
-- Confirm the OpenAI text model name works with the configured key.
-- Test image downloads with URL validation, MIME/size limits and timeouts.
-- Run dry-run tests and inspect the exact post. Enable live publishing only after explicit configuration.
+```
+https://YOUR-VERCEL-DOMAIN/api/mcp?secret=YOUR_MCP_SECRET_PATH
+```
 
-## Secrets
+Treat the URL as a password. Don't put the actual secret in GitHub, issue comments, screenshots, or public docs.
 
-Never expose Binance keys, OpenAI keys, `MCP_SECRET_PATH`, `CRON_SECRET`, `.env`, or production tokens in a public repository. Rotate any credential that is accidentally committed.
+## Scheduled news
+
+The repository config schedules `/api/cron-news` once daily at 03:30 UTC (09:00 Asia/Kolkata). Vercel Hobby plans do not allow schedules more frequently than once daily. Pro can use `0 */3 * * *` for every three hours if that is desired.
+
+The route first checks `CRON_SECRET`, then `NEWS_ENABLED`. Dry-run is on by default and shows draft output without publishing. Live posting requires:
+1. Set `NEWS_ENABLED=true`.
+2. Set `NEWS_DRY_RUN=false`.
+3. Configure `BINANCE_SQUARE_API_KEY`, `OPENAI_API_KEY`, and the Upstash Redis REST URL/token.
+4. Verify model availability and image-generation permissions on the OpenAI API key.
+5. Review a dry-run draft before enabling live posts.
+
+## Security & operational notes
+
+- Never commit `.env` or any real API keys.
+- Rotate any secret accidentally exposed in a public repository.
+- Publishing tools should only be called after the user explicitly approves the exact draft.
+- Binance API response formats and credentials must be verified with a controlled real test; this code cannot prove external credentials are valid by itself.
+- Vercel Functions are request-driven. This project does not use an in-process scheduler or local `posted-news.json`; Redis stores article IDs durably.
