@@ -2,9 +2,7 @@ import OpenAI from 'openai';
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
-import { binancePost, postText, postWithImage, formatResult } from '../lib/binance.js';
+import { postText, postWithImage, formatResult } from '../lib/binance.js';
 
 const MCP_SECRET_PATH = process.env.MCP_SECRET_PATH;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
