@@ -27,7 +27,7 @@ Vercel-hosted Node.js MCP server for Binance Square publishing plus optional Coi
 - `BINANCE_SQUARE_API_KEY`: Binance Square OpenAPI key.
 - `MCP_SECRET_PATH`: a long random secret used as the `secret` query value in the MCP URL.
 - `OPENAI_API_KEY`: required for AI-generated images and news drafts. Text-only manual posts do not need OpenAI.
-- `OPENAI_TEXT_MODEL`: defaults to `gpt-6-luna`; it must be enabled for your API key.
+- `OPENAI_TEXT_MODEL`: defaults to `gpt-4.1-mini`; you can override it with a model available to your API key.
 - `OPENAI_IMAGE_MODEL`: defaults to `gpt-image-2`.
 - `CRON_SECRET`: required for scheduled news requests. Vercel sends this as a Bearer token for Cron invocations.
 - `NEWS_ENABLED`: keep `false` until configured.
