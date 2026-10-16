@@ -1,0 +1,7 @@
+node_modules/
+.env
+.env.*
+!.env.example
+posted-news.json
+.vercel/
+.DS_Store
