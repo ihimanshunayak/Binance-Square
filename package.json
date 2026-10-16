@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "check:syntax": "node --check api/mcp.js && node --check api/cron-news.js && node --check lib/binance.js"
+    "check:syntax": "node --check api/mcp.js && node --check api/cron-news.js && node --check api/health.js && node --check lib/binance.js && node --check scripts/smoke-test.js && node --test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",
