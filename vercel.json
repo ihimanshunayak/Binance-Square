@@ -10,5 +10,11 @@
       "path": "/api/cron-news",
       "schedule": "30 3 * * *"
     }
+  ],
+  "rewrites": [
+    {
+      "source": "/mcp/:secret",
+      "destination": "/api/mcp?secret=:secret"
+    }
   ]
 }
