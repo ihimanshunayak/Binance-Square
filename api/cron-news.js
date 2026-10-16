@@ -7,6 +7,7 @@ import { postText, postWithImage } from '../lib/binance.js';
 const RSS_URL = 'https://www.coindesk.com/arc/outboundfeeds/rss/';
 const USER_AGENT = 'Mozilla/5.0 (compatible; BinanceSquareBot/1.1)';
 const POSTED_KEY = 'binance-square:posted-news:v1';
+const BOOTSTRAP_KEY = 'binance-square:news-bootstrapped:v1';
 const LOCK_KEY = 'binance-square:news-lock:v1';
 
 function redisConfig() {
@@ -74,7 +75,7 @@ async function fetchArticleText(url) {
 }
 
 async function writePost(openai, news, articleText) {
-  const model = process.env.OPENAI_TEXT_MODEL || 'gpt-6-luna';
+  const model = process.env.OPENAI_TEXT_MODEL || 'gpt-4.1-mini';
   const language = process.env.NEWS_POST_LANGUAGE || 'English';
   const prompt =
     'Write an original Binance Square crypto-news post in ' + language + '. Use only verifiable details from the provided story. ' +
@@ -131,14 +132,24 @@ export default async function handler(req, res) {
     const latest = await fetchLatestNews(10);
     if (!latest.length) return res.status(200).json({ ok: true, results: [], message: 'CoinDesk RSS returned no usable articles.' });
 
+    const bootstrapped = dryRun ? true : Boolean(await redisCommand(['GET', BOOTSTRAP_KEY]));
     const candidates = [];
     for (const news of latest) {
-      if (candidates.length >= limit) break;
+      if (candidates.length >= (bootstrapped ? limit : 1)) break;
       if (!dryRun) {
         const posted = await redisCommand(['SISMEMBER', POSTED_KEY, news.id]);
         if (posted === 1 || posted === '1') continue;
       }
       candidates.push(news);
+    }
+
+    // On the first live run, only process the newest unposted story. Once a
+    // successful post is confirmed, the remaining current feed entries are
+    // marked as seen so stale articles are not drip-posted on later days.
+    if (!dryRun && !bootstrapped && candidates.length === 0) {
+      await redisCommand(['SADD', POSTED_KEY, ...latest.map((item) => item.id)]);
+      await redisCommand(['SET', BOOTSTRAP_KEY, '1']);
+      return res.status(200).json({ ok: true, results: [], message: 'Initial feed checked; no unposted articles.' });
     }
 
     const results = [];
@@ -194,7 +205,12 @@ export default async function handler(req, res) {
       }
     }
 
-    return res.status(200).json({ ok: true, dryRun, count: results.length, results });
+    if (!dryRun && !bootstrapped && results.some((item) => item.ok === true)) {
+      await redisCommand(['SADD', POSTED_KEY, ...latest.map((item) => item.id)]);
+      await redisCommand(['SET', BOOTSTRAP_KEY, '1']);
+    }
+    const hasFailures = results.some((item) => item.ok === false);
+    return res.status(hasFailures ? 500 : 200).json({ ok: !hasFailures, dryRun, count: results.length, results });
   } catch (error) {
     console.error('[news] job failed:', error?.message || error);
     return res.status(500).json({ ok: false, error: error?.message || 'News job failed.' });
