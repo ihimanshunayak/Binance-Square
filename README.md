@@ -6,7 +6,7 @@ Vercel-hosted Node.js MCP server for Binance Square publishing plus optional Coi
 
 - Public landing page at `/`.
 - Safe health endpoint at `/api/health` (reports configuration booleans only; never returns secret values).
-- Stateless Streamable HTTP MCP endpoint at `/api/mcp?secret=<MCP_SECRET_PATH>`.
+- Stateless Streamable HTTP MCP endpoint at `/mcp/<MCP_SECRET_PATH>` (rewritten internally to the Vercel function).
 - MCP tools:
   - `post_to_binance_square`: text-only post.
   - `post_with_image_to_binance_square`: image URL or AI-generated image plus post text.
@@ -34,14 +34,14 @@ Vercel-hosted Node.js MCP server for Binance Square publishing plus optional Coi
 - `NEWS_DRY_RUN`: defaults safely to `true`; set it to `false` only when you want live posts.
 - `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`: required for live news posting so duplicate article IDs persist between Vercel Function invocations.
 
-Optional variables: `NEWS_POSTS_PER_RUN` (1-3, default 1), `NEWS_POST_LANGUAGE` (default English), `NEWS_IMAGE_MODE` (`generate`, `none`, or `source`; default `generate`). Reusing CoinDesk source images requires appropriate reuse rights; generated original art is the default.
+Optional variables: `NEWS_POSTS_PER_RUN` (1-3, default 1), `NEWS_MAX_AGE_HOURS` (default 48; older stories are skipped), `NEWS_POST_LANGUAGE` (default English), `NEWS_IMAGE_MODE` (`generate`, `none`, or `source`; default `generate`). Reusing CoinDesk source images requires appropriate reuse rights; generated original art is the default.
 
 ## MCP connector URL
 
 After setting `MCP_SECRET_PATH` in Vercel, connect your MCP client to:
 
 ```
-https://YOUR-VERCEL-DOMAIN/api/mcp?secret=YOUR_MCP_SECRET_PATH
+https://YOUR-VERCEL-DOMAIN/mcp/YOUR_MCP_SECRET_PATH
 ```
 
 Treat the URL as a password. Don't put the actual secret in GitHub, issue comments, screenshots, or public docs.
