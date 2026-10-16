@@ -132,9 +132,17 @@ export default async function handler(req, res) {
     const latest = await fetchLatestNews(10);
     if (!latest.length) return res.status(200).json({ ok: true, results: [], message: 'CoinDesk RSS returned no usable articles.' });
 
+    const maxAgeHours = Math.max(1, Number.parseInt(process.env.NEWS_MAX_AGE_HOURS || '48', 10) || 48);
+    const now = Date.now();
+    const recent = latest.filter((news) => {
+      const publishedAt = Date.parse(news.pubDate || '');
+      return Number.isFinite(publishedAt) && publishedAt <= now + 5 * 60 * 1000 &&
+        now - publishedAt <= maxAgeHours * 60 * 60 * 1000;
+    });
+
     const bootstrapped = dryRun ? true : Boolean(await redisCommand(['GET', BOOTSTRAP_KEY]));
     const candidates = [];
-    for (const news of latest) {
+    for (const news of recent) {
       if (candidates.length >= (bootstrapped ? limit : 1)) break;
       if (!dryRun) {
         const posted = await redisCommand(['SISMEMBER', POSTED_KEY, news.id]);
