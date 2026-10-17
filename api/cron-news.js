@@ -6,28 +6,86 @@ import { postText, postWithImage } from '../lib/binance.js';
 
 const RSS_URL = 'https://www.coindesk.com/arc/outboundfeeds/rss/';
 const USER_AGENT = 'Mozilla/5.0 (compatible; BinanceSquareBot/1.1)';
-const POSTED_KEY = 'binance-square:posted-news:v1';
-const BOOTSTRAP_KEY = 'binance-square:news-bootstrapped:v1';
-const LOCK_KEY = 'binance-square:news-lock:v1';
+const POSTED_PREFIX = 'posted:';
+const BOOTSTRAP_KEY = 'news-bootstrapped';
+const LOCK_KEY = 'news-lock';
+const TABLE = 'binance_square_kv';
 
-function redisConfig() {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) throw new Error('Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN before enabling live news posts.');
-  return { url: url.replace(/\/+$/, ''), token };
+function supabaseConfig() {
+  const url = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '').replace(/\\/+$/, '');
+  const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error('Set SUPABASE_URL and SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY) before enabling live news posts.');
+  return { url, key };
 }
 
-async function redisCommand(command) {
+async function supabaseRequest(path, options = {}) {
   const config = supabaseConfig();
-  const response = await fetch(config.url, {
-    method: 'POST',
-    headers: { Authorization: 'Bearer ' + config.token, 'Content-Type': 'application/json' },
-    body: JSON.stringify(command),
+  const response = await fetch(config.url + '/rest/v1/' + path, {
+    ...options,
+    headers: {
+      apikey: config.key,
+      Authorization: 'Bearer ' + config.key,
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+      ...options.headers
+    },
     signal: AbortSignal.timeout(10000)
   });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.error) throw new Error('Redis request failed: ' + (data.error || response.status));
-  return data.result;
+  const body = await response.text();
+  let data;
+  try { data = body ? JSON.parse(body) : null; } catch { data = body; }
+  if (!response.ok) {
+    const detail = typeof data === 'object' ? (data?.message || data?.hint || data?.code || response.status) : response.status;
+    throw new Error('Supabase request failed: ' + detail);
+  }
+  return data;
+}
+
+async function getValue(key) {
+  const rows = await supabaseRequest(`${TABLE}?key=eq.${encodeURIComponent(key)}&select=value&limit=1`, { method: 'GET' });
+  return rows?.[0]?.value ?? null;
+}
+
+async function setValue(key, value) {
+  await supabaseRequest(TABLE, {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify({ key, value, updated_at: new Date().toISOString() })
+  });
+}
+
+async function hasPosted(newsId) {
+  return (await getValue(POSTED_PREFIX + newsId)) === '1';
+}
+
+async function markPosted(newsId) {
+  await setValue(POSTED_PREFIX + newsId, '1');
+}
+
+async function acquireLock(token) {
+  try {
+    await supabaseRequest(TABLE, {
+      method: 'POST',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({ key: LOCK_KEY, value: token, updated_at: new Date().toISOString() })
+    });
+    return true;
+  } catch (error) {
+    if (String(error?.message || '').includes('Supabase request failed')) return false;
+    throw error;
+  }
+}
+
+async function releaseLock(token) {
+  await supabaseRequest(`${TABLE}?key=eq.${encodeURIComponent(LOCK_KEY)}&value=eq.${encodeURIComponent(token)}`, {
+    method: 'DELETE',
+    headers: { Prefer: 'return=minimal' }
+  });
+}
+
+async function markInitialFeedSeen(items) {
+  for (const item of items) await markPosted(item.id);
+  await setValue(BOOTSTRAP_KEY, '1');
 }
 
 async function fetchLatestNews(limit = 10) {
@@ -123,7 +181,7 @@ export default async function handler(req, res) {
   let lockToken = null;
   try {
     if (!dryRun) {
-      redisConfig();
+      supabaseConfig();
       lockToken = randomUUID();
       const acquired = await acquireLock(lockToken);
       if (!acquired) return res.status(409).json({ ok: false, error: 'A news job is already running.' });
