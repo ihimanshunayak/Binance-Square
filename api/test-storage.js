@@ -48,9 +48,20 @@ export default async function handler(req, res) {
   }
 
   const secret = process.env.CRON_SECRET;
-  if (!secret || req.headers.authorization !== 'Bearer ' + secret) {
+  const cronAuthorized = Boolean(secret) && req.headers.authorization === 'Bearer ' + secret;
+  const triggerToken = typeof req.query?.token === 'string'
+    ? req.query.token
+    : new URL(req.url || '/', 'https://vercel.invalid').searchParams.get('token');
+  const manualAuthorized = req.method === 'GET' &&
+    Boolean(process.env.STORAGE_TEST_TRIGGER_TOKEN) &&
+    triggerToken === process.env.STORAGE_TEST_TRIGGER_TOKEN;
+
+  if (!cronAuthorized && !manualAuthorized) {
     return res.status(401).json({ ok: false, error: 'Unauthorized' });
   }
+
+  // The temporary manual trigger token is intentionally separate from CRON_SECRET.
+  // It can invoke only this storage round-trip test and never publishes to Binance.
 
   const key = '__persistence_test__:' + randomUUID();
   const value = 'roundtrip:' + randomUUID();
