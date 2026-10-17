@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 const TABLE = 'binance_square_kv';
+const STATUS_KEY = '__persistence_test_status__';
 
 function getConfig() {
   const url = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '').replace(/\/+$/, '');
@@ -28,9 +29,21 @@ async function request(path, options = {}) {
   return data;
 }
 
+async function saveStatus(status) {
+  await request(TABLE, {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify({
+      key: STATUS_KEY,
+      value: JSON.stringify({ ...status, checkedAt: new Date().toISOString() }),
+      updated_at: new Date().toISOString()
+    })
+  });
+}
+
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    res.setHeader('Allow', 'GET, POST');
     return res.status(405).json({ ok: false, error: 'Method not allowed' });
   }
 
@@ -58,9 +71,7 @@ export default async function handler(req, res) {
     });
     readSucceeded = Array.isArray(rows) && rows.length === 1 && rows[0].key === key && rows[0].value === value;
 
-    if (!readSucceeded) {
-      return res.status(500).json({ ok: false, writeSucceeded, readSucceeded, cleanupSucceeded, error: 'The value written could not be read back exactly.' });
-    }
+    if (!readSucceeded) throw new Error('The value written could not be read back exactly.');
 
     await request(TABLE + '?key=eq.' + encodeURIComponent(key), {
       method: 'DELETE',
@@ -68,15 +79,14 @@ export default async function handler(req, res) {
     });
     cleanupSucceeded = true;
 
+    const result = { ok: true, writeSucceeded, readSucceeded, cleanupSucceeded };
+    await saveStatus(result);
+    console.log('[storage-test] Supabase write/read/delete round-trip succeeded.');
     return res.status(200).json({
-      ok: writeSucceeded && readSucceeded && cleanupSucceeded,
-      writeSucceeded,
-      readSucceeded,
-      cleanupSucceeded,
+      ...result,
       message: 'Supabase write/read/delete round-trip succeeded. No Binance post was attempted.'
     });
   } catch (error) {
-    // Best-effort cleanup in case the test write succeeded but a later operation failed.
     if (writeSucceeded && !cleanupSucceeded) {
       try {
         await request(TABLE + '?key=eq.' + encodeURIComponent(key), {
@@ -84,14 +94,14 @@ export default async function handler(req, res) {
           headers: { Prefer: 'return=minimal' }
         });
         cleanupSucceeded = true;
-      } catch { /* Keep the response free of credentials and database details. */ }
+      } catch { /* Best-effort cleanup; do not expose database details. */ }
     }
+
+    const result = { ok: false, writeSucceeded, readSucceeded, cleanupSucceeded };
+    try { await saveStatus(result); } catch { /* Status may be unavailable if Supabase is the failing component. */ }
     console.error('[storage-test] Supabase persistence test failed:', error?.message || 'unknown error');
     return res.status(500).json({
-      ok: false,
-      writeSucceeded,
-      readSucceeded,
-      cleanupSucceeded,
+      ...result,
       error: 'Supabase persistence test failed. Check Vercel runtime logs for the sanitized error.'
     });
   }
