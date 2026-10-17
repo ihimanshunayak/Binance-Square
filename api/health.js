@@ -52,6 +52,7 @@ export default async function handler(req, res) {
   }
 
   const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
+  const hasAzureOpenAI = Boolean(process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_API_KEY);
   const hasBinance = Boolean(process.env.BINANCE_SQUARE_API_KEY);
   const hasMcpSecret = Boolean(process.env.MCP_SECRET_PATH);
   const hasCronSecret = Boolean(process.env.CRON_SECRET);
@@ -66,11 +67,12 @@ export default async function handler(req, res) {
       mcpEndpointConfigured: hasMcpSecret,
       textPublishingConfigured: hasBinance,
       imageGenerationConfigured: hasOpenAI,
-      newsDraftingConfigured: hasCronSecret && hasOpenAI,
+      azureOpenAIConfigured: hasAzureOpenAI,
+      newsDraftingConfigured: hasCronSecret && hasAzureOpenAI,
       newsPersistentStorageConfigured: hasSupabase,
       supabaseStorageReachable: storage.reachable,
       supabaseWriteReadTest: storage.writeReadTest,
-      liveNewsPublishingReady: hasCronSecret && hasOpenAI && hasBinance && storage.reachable,
+      liveNewsPublishingReady: hasCronSecret && hasAzureOpenAI && hasBinance && storage.reachable,
       newsAutomationEnabled: String(process.env.NEWS_ENABLED || 'false').toLowerCase() === 'true',
       newsDryRun: String(process.env.NEWS_DRY_RUN || 'true').toLowerCase() !== 'false'
     },
