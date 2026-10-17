@@ -18,7 +18,7 @@ function redisConfig() {
 }
 
 async function redisCommand(command) {
-  const config = redisConfig();
+  const config = supabaseConfig();
   const response = await fetch(config.url, {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + config.token, 'Content-Type': 'application/json' },
@@ -125,8 +125,8 @@ export default async function handler(req, res) {
     if (!dryRun) {
       redisConfig();
       lockToken = randomUUID();
-      const acquired = await redisCommand(['SET', LOCK_KEY, lockToken, 'NX', 'EX', '300']);
-      if (acquired !== 'OK') return res.status(409).json({ ok: false, error: 'A news job is already running.' });
+      const acquired = await acquireLock(lockToken);
+      if (!acquired) return res.status(409).json({ ok: false, error: 'A news job is already running.' });
     }
 
     const latest = await fetchLatestNews(10);
@@ -140,13 +140,12 @@ export default async function handler(req, res) {
         now - publishedAt <= maxAgeHours * 60 * 60 * 1000;
     });
 
-    const bootstrapped = dryRun ? true : Boolean(await redisCommand(['GET', BOOTSTRAP_KEY]));
+    const bootstrapped = dryRun ? true : (await getValue(BOOTSTRAP_KEY)) === '1';
     const candidates = [];
     for (const news of recent) {
       if (candidates.length >= (bootstrapped ? limit : 1)) break;
       if (!dryRun) {
-        const posted = await redisCommand(['SISMEMBER', POSTED_KEY, news.id]);
-        if (posted === 1 || posted === '1') continue;
+        if (await hasPosted(news.id)) continue;
       }
       candidates.push(news);
     }
@@ -155,8 +154,7 @@ export default async function handler(req, res) {
     // successful post is confirmed, the remaining current feed entries are
     // marked as seen so stale articles are not drip-posted on later days.
     if (!dryRun && !bootstrapped && candidates.length === 0) {
-      await redisCommand(['SADD', POSTED_KEY, ...latest.map((item) => item.id)]);
-      await redisCommand(['SET', BOOTSTRAP_KEY, '1']);
+      await markInitialFeedSeen(latest);
       return res.status(200).json({ ok: true, results: [], message: 'Initial feed checked; no unposted articles.' });
     }
 
@@ -204,7 +202,7 @@ export default async function handler(req, res) {
           continue;
         }
 
-        await redisCommand(['SADD', POSTED_KEY, news.id]);
+        await markPosted(news.id);
         results.push({ title: news.title, ok: true, postId: response?.data?.id || null, link: response?.data?.shareLink || null });
         console.log('[news] published:', news.title);
       } catch (error) {
@@ -214,8 +212,7 @@ export default async function handler(req, res) {
     }
 
     if (!dryRun && !bootstrapped && results.some((item) => item.ok === true)) {
-      await redisCommand(['SADD', POSTED_KEY, ...latest.map((item) => item.id)]);
-      await redisCommand(['SET', BOOTSTRAP_KEY, '1']);
+      await markInitialFeedSeen(latest);
     }
     const hasFailures = results.some((item) => item.ok === false);
     return res.status(hasFailures ? 500 : 200).json({ ok: !hasFailures, dryRun, count: results.length, results });
@@ -225,13 +222,7 @@ export default async function handler(req, res) {
   } finally {
     if (lockToken) {
       try {
-        await redisCommand([
-          'EVAL',
-          "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
-          '1',
-          LOCK_KEY,
-          lockToken
-        ]);
+        await releaseLock(lockToken);
       } catch (error) {
         console.error('[news] lock release failed:', error?.message || error);
       }
