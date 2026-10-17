@@ -8,7 +8,7 @@ export default function handler(req, res) {
   const hasBinance = Boolean(process.env.BINANCE_SQUARE_API_KEY);
   const hasMcpSecret = Boolean(process.env.MCP_SECRET_PATH);
   const hasCronSecret = Boolean(process.env.CRON_SECRET);
-  const hasRedis = Boolean(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN);
+  const hasSupabase = Boolean((process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL) && (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY));
 
   return res.status(200).json({
     ok: true,
@@ -19,8 +19,8 @@ export default function handler(req, res) {
       textPublishingConfigured: hasBinance,
       imageGenerationConfigured: hasOpenAI,
       newsDraftingConfigured: hasCronSecret && hasOpenAI,
-      newsPersistentStorageConfigured: hasRedis,
-      liveNewsPublishingReady: hasCronSecret && hasOpenAI && hasBinance && hasRedis,
+      newsPersistentStorageConfigured: hasSupabase,
+      liveNewsPublishingReady: hasCronSecret && hasOpenAI && hasBinance && hasSupabase,
       newsAutomationEnabled: String(process.env.NEWS_ENABLED || 'false').toLowerCase() === 'true',
       newsDryRun: String(process.env.NEWS_DRY_RUN || 'true').toLowerCase() !== 'false'
     },
