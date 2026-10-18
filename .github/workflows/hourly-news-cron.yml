@@ -1,0 +1,40 @@
+name: Hourly Binance Square News
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hourly-binance-square-news
+  cancel-in-progress: false
+
+jobs:
+  trigger-news:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Validate required secret
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::Missing repository Actions secret CRON_SECRET. Add the same value configured in Vercel Project Settings > Environment Variables."
+            exit 1
+          fi
+      - name: Trigger protected production news endpoint
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          NEWS_ENDPOINT: https://binancesquare.vercel.app/api/cron-news
+        run: |
+          set -euo pipefail
+          curl --silent --show-error --fail-with-body \
+            --max-time 70 \
+            --request POST \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            --header "Content-Type: application/json" \
+            "$NEWS_ENDPOINT"
+          echo
