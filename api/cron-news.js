@@ -117,18 +117,34 @@ async function fetchArticleText(url) {
   if (articleUrl.protocol !== 'https:' || !(articleUrl.hostname === 'coindesk.com' || articleUrl.hostname.endsWith('.coindesk.com'))) {
     throw new Error('RSS article URL is outside the allowed CoinDesk domain.');
   }
-  const response = await fetch(articleUrl, {
-    headers: { 'User-Agent': USER_AGENT },
-    redirect: 'error',
-    signal: AbortSignal.timeout(15000)
-  });
-  if (!response.ok) throw new Error('CoinDesk article fetch failed: HTTP ' + response.status);
-  const $ = cheerio.load(await response.text());
-  const paragraphs = $('article p, main p').map((_, element) => $(element).text().trim()).get().filter((text) => text.length > 40);
-  return {
-    text: [...new Set(paragraphs)].join('\n').slice(0, 7000),
-    ogImage: $('meta[property="og:image"]').attr('content') || null
-  };
+  // CoinDesk uses redirects for canonical/article routes. Follow them, but re-check
+  // every destination so a source-controlled URL cannot redirect to an arbitrary host.
+  let current = articleUrl;
+  for (let hop = 0; hop < 4; hop++) {
+    const response = await fetch(current, {
+      headers: { 'User-Agent': USER_AGENT },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(10000)
+    });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get('location');
+      if (!location) throw new Error('CoinDesk article redirect omitted Location.');
+      const next = new URL(location, current);
+      if (next.protocol !== 'https:' || !(next.hostname === 'coindesk.com' || next.hostname.endsWith('.coindesk.com'))) {
+        throw new Error('CoinDesk article redirect left the allowed domain.');
+      }
+      current = next;
+      continue;
+    }
+    if (!response.ok) throw new Error('CoinDesk article fetch failed: HTTP ' + response.status);
+    const $ = cheerio.load(await response.text());
+    const paragraphs = $('article p, main p').map((_, element) => $(element).text().trim()).get().filter((text) => text.length > 40);
+    return {
+      text: [...new Set(paragraphs)].join('\n').slice(0, 7000),
+      ogImage: $('meta[property="og:image"]').attr('content') || null
+    };
+  }
+  throw new Error('CoinDesk article exceeded the redirect limit.');
 }
 
 function azureOpenAIConfig() {
