@@ -9,6 +9,7 @@ const POSTED_PREFIX = 'posted:';
 const BOOTSTRAP_KEY = 'news-bootstrapped';
 const LOCK_KEY = 'news-lock';
 const TABLE = 'binance_square_kv';
+const LAST_RUN_KEY = 'news-last-run';
 
 function supabaseConfig() {
   const url = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '').replace(/\/+$/, '');
@@ -59,6 +60,14 @@ async function hasPosted(newsId) {
 
 async function markPosted(newsId) {
   await setValue(POSTED_PREFIX + newsId, '1');
+}
+
+async function saveRunStatus(status) {
+  try {
+    await setValue(LAST_RUN_KEY, JSON.stringify({ ...status, updatedAt: new Date().toISOString() }));
+  } catch (error) {
+    console.error('[news] unable to persist run status:', error?.message || 'unknown error');
+  }
 }
 
 async function acquireLock(token) {
@@ -266,6 +275,8 @@ export default async function handler(req, res) {
     return res.status(503).json({ ok: false, error: error?.message || 'Azure OpenAI configuration is required.' });
   }
 
+  const startedAt = new Date().toISOString();
+  let runStage = 'initialization';
   let lockToken = null;
   try {
     if (!dryRun) {
@@ -273,10 +284,15 @@ export default async function handler(req, res) {
       lockToken = randomUUID();
       const acquired = await acquireLock(lockToken);
       if (!acquired) return res.status(409).json({ ok: false, error: 'A news job is already running.' });
+      await saveRunStatus({ status: 'running', startedAt, dryRun, runStage: 'started' });
     }
 
+    runStage = 'rss';
     const latest = await fetchLatestNews(10);
-    if (!latest.length) return res.status(200).json({ ok: true, results: [], message: 'CoinDesk RSS returned no usable articles.' });
+    if (!latest.length) {
+      if (!dryRun) await saveRunStatus({ status: 'success', startedAt, completedAt: new Date().toISOString(), dryRun, attempted: 0, published: 0, failed: 0, outcome: 'no_usable_rss_items' });
+      return res.status(200).json({ ok: true, results: [], message: 'CoinDesk RSS returned no usable articles.' });
+    }
 
     const maxAgeHours = Math.max(1, Number.parseInt(process.env.NEWS_MAX_AGE_HOURS || '48', 10) || 48);
     const now = Date.now();
@@ -286,6 +302,7 @@ export default async function handler(req, res) {
         now - publishedAt <= maxAgeHours * 60 * 60 * 1000;
     });
 
+    runStage = 'deduplication';
     const bootstrapped = dryRun ? true : (await getValue(BOOTSTRAP_KEY)) === '1';
     const candidates = [];
     for (const news of recent) {
@@ -301,6 +318,7 @@ export default async function handler(req, res) {
     // marked as seen so stale articles are not drip-posted on later days.
     if (!dryRun && !bootstrapped && candidates.length === 0) {
       await markInitialFeedSeen(latest);
+      await saveRunStatus({ status: 'success', startedAt, completedAt: new Date().toISOString(), dryRun, attempted: 0, published: 0, failed: 0, outcome: 'initial_feed_bootstrapped' });
       return res.status(200).json({ ok: true, results: [], message: 'Initial feed checked; no unposted articles.' });
     }
 
@@ -308,9 +326,11 @@ export default async function handler(req, res) {
     for (const news of candidates) {
       try {
         let article = { text: '', ogImage: null };
+        runStage = 'article_fetch';
         try { article = await fetchArticleText(news.link); }
         catch (error) { console.warn('[news] article fallback:', error?.message || error); }
 
+        runStage = 'azure_draft';
         const post = await writePost(news, article.text);
         const imageMode = process.env.NEWS_IMAGE_MODE || 'none';
 
@@ -326,6 +346,7 @@ export default async function handler(req, res) {
         }
 
         // Automated news is text-only so it does not require OpenAI image credits.
+        runStage = 'binance_publish';
         const response = await postText(post);
 
         if (response?.code !== '000000') {
@@ -334,11 +355,12 @@ export default async function handler(req, res) {
           continue;
         }
 
+        runStage = 'supabase_mark_posted';
         await markPosted(news.id);
         results.push({ title: news.title, ok: true, postId: response?.data?.id || null, link: response?.data?.shareLink || null });
         console.log('[news] published:', news.title);
       } catch (error) {
-        results.push({ title: news.title, ok: false, error: error?.message || 'Unknown error' });
+        results.push({ title: news.title, ok: false, failureStage: runStage, error: error?.message || 'Unknown error' });
         console.error('[news] article failed:', error?.message || error);
       }
     }
@@ -347,9 +369,36 @@ export default async function handler(req, res) {
       await markInitialFeedSeen(latest);
     }
     const hasFailures = results.some((item) => item.ok === false);
+    const published = results.filter((item) => item.ok === true).length;
+    const failed = results.filter((item) => item.ok === false).length;
+    if (!dryRun) {
+      await saveRunStatus({
+        status: hasFailures ? 'failed' : 'success',
+        startedAt,
+        completedAt: new Date().toISOString(),
+        dryRun,
+        attempted: results.length,
+        published,
+        failed,
+        runStage: hasFailures ? (results.find((item) => item.ok === false)?.failureStage || runStage) : 'complete',
+        lastPost: results.find((item) => item.ok === true) ? {
+          title: results.find((item) => item.ok === true).title,
+          postId: results.find((item) => item.ok === true).postId || null,
+          link: results.find((item) => item.ok === true).link || null
+        } : null
+      });
+    }
     return res.status(hasFailures ? 500 : 200).json({ ok: !hasFailures, dryRun, count: results.length, results });
   } catch (error) {
     console.error('[news] job failed:', error?.message || error);
+    if (!dryRun) await saveRunStatus({
+      status: 'failed',
+      startedAt,
+      completedAt: new Date().toISOString(),
+      dryRun,
+      runStage,
+      errorCode: /HTTP (\\d{3})/.exec(String(error?.message || ''))?.[1] || 'JOB_FAILED'
+    });
     return res.status(500).json({ ok: false, error: error?.message || 'News job failed.' });
   } finally {
     if (lockToken) {
