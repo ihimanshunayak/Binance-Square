@@ -14,10 +14,10 @@ function responseMock() {
   };
 }
 
-test('health endpoint returns runtime status on GET', () => {
+test('health endpoint returns runtime status on GET', async () => {
   const req = { method: 'GET' };
   const res = responseMock();
-  healthHandler(req, res);
+  await healthHandler(req, res);
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.ok, true);
   assert.equal(res.body.service, 'binance-square');
