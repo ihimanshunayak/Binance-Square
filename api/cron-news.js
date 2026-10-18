@@ -62,12 +62,34 @@ async function markPosted(newsId) {
 }
 
 async function acquireLock(token) {
+  const insertLock = () => supabaseRequest(TABLE, {
+    method: 'POST',
+    headers: { Prefer: 'return=minimal' },
+    body: JSON.stringify({ key: LOCK_KEY, value: token, updated_at: new Date().toISOString() })
+  });
+
   try {
-    await supabaseRequest(TABLE, {
-      method: 'POST',
-      headers: { Prefer: 'return=minimal' },
-      body: JSON.stringify({ key: LOCK_KEY, value: token, updated_at: new Date().toISOString() })
-    });
+    await insertLock();
+    return true;
+  } catch (insertError) {
+    if (!String(insertError?.message || '').includes('Supabase request failed')) throw insertError;
+  }
+
+  // Recover a lock left behind if Vercel terminated the previous function before finally ran.
+  const rows = await supabaseRequest(
+    `${TABLE}?key=eq.${encodeURIComponent(LOCK_KEY)}&select=value,updated_at&limit=1`,
+    { method: 'GET' }
+  );
+  const lock = rows?.[0];
+  const lockAge = lock?.updated_at ? Date.now() - Date.parse(lock.updated_at) : 0;
+  if (!lock || !Number.isFinite(lockAge) || lockAge < 10 * 60 * 1000) return false;
+
+  await supabaseRequest(
+    `${TABLE}?key=eq.${encodeURIComponent(LOCK_KEY)}&value=eq.${encodeURIComponent(lock.value)}&updated_at=eq.${encodeURIComponent(lock.updated_at)}`,
+    { method: 'DELETE', headers: { Prefer: 'return=minimal' } }
+  );
+  try {
+    await insertLock();
     return true;
   } catch (error) {
     if (String(error?.message || '').includes('Supabase request failed')) return false;
@@ -83,8 +105,16 @@ async function releaseLock(token) {
 }
 
 async function markInitialFeedSeen(items) {
-  for (const item of items) await markPosted(item.id);
-  await setValue(BOOTSTRAP_KEY, '1');
+  const updatedAt = new Date().toISOString();
+  const rows = [
+    ...items.map((item) => ({ key: POSTED_PREFIX + item.id, value: '1', updated_at: updatedAt })),
+    { key: BOOTSTRAP_KEY, value: '1', updated_at: updatedAt }
+  ];
+  await supabaseRequest(TABLE, {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify(rows)
+  });
 }
 
 async function fetchLatestNews(limit = 10) {
