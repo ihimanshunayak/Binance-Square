@@ -55,7 +55,17 @@ async function setValue(key, value) {
 }
 
 async function hasPosted(newsId) {
-  return (await getValue(POSTED_PREFIX + newsId)) === '1';
+  const value = await getValue(POSTED_PREFIX + newsId);
+  // Pending means Binance may have accepted the request before its response was lost.
+  // Suppress automatic retries until that uncertain outcome is reconciled.
+  return value === '1' || (typeof value === 'string' && value.startsWith('pending:'));
+}
+
+async function clearPendingMarker(newsId, pendingValue) {
+  await supabaseRequest(
+    TABLE + '?key=eq.' + encodeURIComponent(POSTED_PREFIX + newsId) + '&value=eq.' + encodeURIComponent(pendingValue),
+    { method: 'DELETE', headers: { Prefer: 'return=minimal' } }
+  );
 }
 
 async function markPosted(newsId) {
@@ -240,7 +250,7 @@ async function writePost(news, articleText) {
   catch { result = {}; }
   if (!response.ok) {
     const message = result?.error?.message || result?.message || 'HTTP ' + response.status;
-    throw new Error('Azure OpenAI chat completion failed: ' + String(message).slice(0, 500));
+    throw new Error('Azure OpenAI chat completion failed (HTTP ' + response.status + '): ' + String(message).slice(0, 500));
   }
   const output = result?.choices?.[0]?.message?.content?.trim();
   if (!output) throw new Error('Azure OpenAI returned an empty draft.');
@@ -324,6 +334,7 @@ export default async function handler(req, res) {
 
     const results = [];
     for (const news of candidates) {
+      let pendingMarkerWritten = false;
       try {
         let article = { text: '', ogImage: null };
         runStage = 'article_fetch';
@@ -347,30 +358,64 @@ export default async function handler(req, res) {
 
         // Automated news is text-only so it does not require OpenAI image credits.
         runStage = 'binance_publish';
+        const pendingValue = 'pending:' + randomUUID();
+        await setValue(POSTED_PREFIX + news.id, pendingValue);
+        pendingMarkerWritten = true;
         const response = await postText(post);
 
         if (response?.code !== '000000') {
-          results.push({ title: news.title, ok: false, error: 'Binance did not confirm success.', response });
+          await clearPendingMarker(news.id, pendingValue);
+          pendingMarkerWritten = false;
+          results.push({ title: news.title, ok: false, failureStage: 'binance_publish', error: 'Binance did not confirm success.', response });
           console.error('[news] Binance did not confirm post:', JSON.stringify(response).slice(0, 1000));
           continue;
         }
 
+        const postId = response?.data?.id || null;
+        const link = response?.data?.shareLink || (postId ? 'https://www.binance.com/square/post/' + postId : null);
+        const publishedResult = { title: news.title, ok: true, published: true, postId, link };
+        console.log('[news] Binance success confirmed:', JSON.stringify({ title: news.title, postId, link }));
+
         runStage = 'supabase_mark_posted';
-        await markPosted(news.id);
-        results.push({ title: news.title, ok: true, postId: response?.data?.id || null, link: response?.data?.shareLink || null });
-        console.log('[news] published:', news.title);
+        try {
+          await markPosted(news.id);
+          pendingMarkerWritten = false;
+          results.push(publishedResult);
+        } catch (error) {
+          // The pending marker intentionally remains so a confirmed Binance post cannot be duplicated.
+          results.push({
+            ...publishedResult,
+            ok: false,
+            failureStage: 'supabase_mark_posted',
+            error: error?.message || 'Supabase could not save the post marker.'
+          });
+          console.error('[news] Binance success confirmed but Supabase post marker failed; pending marker retained:', JSON.stringify({ title: news.title, postId, link }));
+        }
       } catch (error) {
         results.push({ title: news.title, ok: false, failureStage: runStage, error: error?.message || 'Unknown error' });
+        if (pendingMarkerWritten) {
+          console.error('[news] Binance outcome not confirmed; pending marker retained to prevent duplicate retry:', news.title);
+        }
         console.error('[news] article failed:', error?.message || error);
       }
     }
 
-    if (!dryRun && !bootstrapped && results.some((item) => item.ok === true)) {
+    if (!dryRun && !bootstrapped && results.some((item) => item.ok === true || item.published === true)) {
       await markInitialFeedSeen(latest);
     }
     const hasFailures = results.some((item) => item.ok === false);
-    const published = results.filter((item) => item.ok === true).length;
+    const published = results.filter((item) => item.ok === true || item.published === true).length;
     const failed = results.filter((item) => item.ok === false).length;
+    const firstFailure = results.find((item) => item.ok === false) || null;
+    const lastPublished = results.find((item) => item.ok === true || item.published === true) || null;
+    const providerStatus = firstFailure?.failureStage === 'azure_draft'
+      ? /HTTP (\d{3})/.exec(String(firstFailure.error || ''))?.[1]
+      : null;
+    const errorCode = !firstFailure ? null :
+      firstFailure.failureStage === 'azure_draft' ? (providerStatus ? 'AZURE_HTTP_' + providerStatus : 'AZURE_DRAFT_FAILED') :
+      firstFailure.failureStage === 'binance_publish' ? 'BINANCE_PUBLISH_UNCONFIRMED' :
+      firstFailure.failureStage === 'supabase_mark_posted' ? 'SUPABASE_POST_MARKER_FAILED' :
+      'NEWS_ARTICLE_FAILED';
     if (!dryRun) {
       await saveRunStatus({
         status: hasFailures ? 'failed' : 'success',
@@ -380,11 +425,12 @@ export default async function handler(req, res) {
         attempted: results.length,
         published,
         failed,
-        runStage: hasFailures ? (results.find((item) => item.ok === false)?.failureStage || runStage) : 'complete',
-        lastPost: results.find((item) => item.ok === true) ? {
-          title: results.find((item) => item.ok === true).title,
-          postId: results.find((item) => item.ok === true).postId || null,
-          link: results.find((item) => item.ok === true).link || null
+        runStage: hasFailures ? (firstFailure?.failureStage || runStage) : 'complete',
+        errorCode,
+        lastPost: lastPublished ? {
+          title: lastPublished.title,
+          postId: lastPublished.postId || null,
+          link: lastPublished.link || null
         } : null
       });
     }
@@ -397,7 +443,7 @@ export default async function handler(req, res) {
       completedAt: new Date().toISOString(),
       dryRun,
       runStage,
-      errorCode: /HTTP (\\d{3})/.exec(String(error?.message || ''))?.[1] || 'JOB_FAILED'
+      errorCode: /HTTP (\d{3})/.exec(String(error?.message || ''))?.[1] || 'JOB_FAILED'
     });
     return res.status(500).json({ ok: false, error: error?.message || 'News job failed.' });
   } finally {
