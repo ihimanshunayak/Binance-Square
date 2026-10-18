@@ -39,9 +39,48 @@ async function checkSupabaseStorage() {
       }
     } catch { /* A status lookup failure must not mark the main storage query unreachable. */ }
 
-    return { configured: true, reachable: true, writeReadTest };
+    let lastNewsRun = null;
+    try {
+      const runResponse = await fetch(
+        url + '/rest/v1/binance_square_kv?key=eq.news-last-run&select=value&limit=1',
+        {
+          method: 'GET',
+          headers: { apikey: key, Authorization: 'Bearer ' + key },
+          signal: AbortSignal.timeout(4000)
+        }
+      );
+      if (runResponse.ok) {
+        const rows = await runResponse.json();
+        const value = rows?.[0]?.value;
+        if (typeof value === 'string') {
+          try {
+            const parsed = JSON.parse(value);
+            lastNewsRun = {
+              status: parsed.status || null,
+              startedAt: parsed.startedAt || null,
+              completedAt: parsed.completedAt || null,
+              updatedAt: parsed.updatedAt || null,
+              dryRun: parsed.dryRun ?? null,
+              attempted: Number.isFinite(parsed.attempted) ? parsed.attempted : 0,
+              published: Number.isFinite(parsed.published) ? parsed.published : 0,
+              failed: Number.isFinite(parsed.failed) ? parsed.failed : 0,
+              runStage: parsed.runStage || null,
+              outcome: parsed.outcome || null,
+              lastPost: parsed.lastPost ? {
+                title: parsed.lastPost.title || null,
+                postId: parsed.lastPost.postId || null,
+                link: parsed.lastPost.link || null
+              } : null,
+              errorCode: parsed.errorCode || null
+            };
+          } catch { /* Ignore a malformed persisted run status. */ }
+        }
+      }
+    } catch { /* Run-status storage must not make the health endpoint fail. */ }
+
+    return { configured: true, reachable: true, writeReadTest, lastNewsRun };
   } catch {
-    return { configured: true, reachable: false, writeReadTest: null };
+    return { configured: true, reachable: false, writeReadTest: null, lastNewsRun: null };
   }
 }
 
@@ -72,6 +111,7 @@ export default async function handler(req, res) {
       newsPersistentStorageConfigured: hasSupabase,
       supabaseStorageReachable: storage.reachable,
       supabaseWriteReadTest: storage.writeReadTest,
+      lastNewsRun: storage.lastNewsRun || null,
       liveNewsPublishingReady: hasCronSecret && hasAzureOpenAI && hasBinance && storage.reachable,
       newsAutomationEnabled: String(process.env.NEWS_ENABLED || 'false').toLowerCase() === 'true',
       newsDryRun: String(process.env.NEWS_DRY_RUN || 'true').toLowerCase() !== 'false'
