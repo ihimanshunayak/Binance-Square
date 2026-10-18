@@ -97,6 +97,20 @@ export default async function handler(req, res) {
   const hasCronSecret = Boolean(process.env.CRON_SECRET);
   const storage = await checkSupabaseStorage();
   const hasSupabase = storage.configured;
+  const lastNewsRun = storage.lastNewsRun || null;
+  const liveNewsPublishingConfigured = hasCronSecret && hasAzureOpenAI && hasBinance && storage.reachable;
+  const lastRunAt = Date.parse(lastNewsRun?.completedAt || lastNewsRun?.updatedAt || '');
+  const lastRunAgeMs = Date.now() - lastRunAt;
+  const verifiedRecentLivePost = Boolean(
+    lastNewsRun &&
+    lastNewsRun.status === 'success' &&
+    lastNewsRun.dryRun === false &&
+    Number(lastNewsRun.published) > 0 &&
+    (lastNewsRun.lastPost?.postId || lastNewsRun.lastPost?.link) &&
+    Number.isFinite(lastRunAt) &&
+    lastRunAgeMs >= 0 &&
+    lastRunAgeMs <= 48 * 60 * 60 * 1000
+  );
 
   return res.status(200).json({
     ok: true,
@@ -112,7 +126,8 @@ export default async function handler(req, res) {
       supabaseStorageReachable: storage.reachable,
       supabaseWriteReadTest: storage.writeReadTest,
       lastNewsRun: storage.lastNewsRun || null,
-      liveNewsPublishingReady: hasCronSecret && hasAzureOpenAI && hasBinance && storage.reachable,
+      liveNewsPublishingConfigured,
+      liveNewsPublishingReady: liveNewsPublishingConfigured && verifiedRecentLivePost,
       newsAutomationEnabled: String(process.env.NEWS_ENABLED || 'false').toLowerCase() === 'true',
       newsDryRun: String(process.env.NEWS_DRY_RUN || 'true').toLowerCase() !== 'false'
     },
