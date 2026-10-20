@@ -20,21 +20,40 @@ jobs:
       - name: Validate required secret
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        shell: bash
         run: |
-          if [ -z "$CRON_SECRET" ]; then
-            echo "::error::Missing repository Actions secret CRON_SECRET. Add the same value configured in Vercel Project Settings > Environment Variables."
+          set -euo pipefail
+          if [[ -z "${CRON_SECRET:-}" ]]; then
+            echo "::error title=Missing CRON_SECRET::GitHub Actions secret CRON_SECRET is unavailable to this workflow."
+            echo "Add/update CRON_SECRET in repository Settings > Secrets and variables > Actions."
+            echo "Use the same value as Vercel Project Settings > Environment Variables for Production."
             exit 1
           fi
+          echo "CRON_SECRET is present (value intentionally not displayed)."
       - name: Trigger protected production news endpoint
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           NEWS_ENDPOINT: https://binancesquare.vercel.app/api/cron-news
+        shell: bash
         run: |
           set -euo pipefail
-          curl --silent --show-error --fail-with-body \
+          # No automatic retries: an ambiguous publishing response must not
+          # cause a duplicate Binance post.
+          http_code="$(curl --silent --show-error \
             --max-time 70 \
+            --output response.json \
+            --write-out '%{http_code}' \
             --request POST \
             --header "Authorization: Bearer ${CRON_SECRET}" \
             --header "Content-Type: application/json" \
-            "$NEWS_ENDPOINT"
+            "${NEWS_ENDPOINT}")" || {
+              echo "::error::Request failed before an HTTP response was confirmed; inspect durable lastNewsRun before retrying."
+              exit 1
+            }
+          cat response.json
           echo
+          if [[ ! "${http_code}" =~ ^2[0-9][0-9]$ ]]; then
+            echo "::error::Production endpoint returned HTTP ${http_code}."
+            exit 1
+          fi
+          echo "Production endpoint returned HTTP ${http_code}."
