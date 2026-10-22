@@ -2,7 +2,8 @@ name: Hourly Binance Square News
 
 on:
   schedule:
-    - cron: "0 * * * *"
+    # Avoid GitHub's busy top-of-hour window; scheduled runs can be delayed or dropped.
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 permissions:
