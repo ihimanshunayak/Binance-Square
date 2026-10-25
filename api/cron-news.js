@@ -230,14 +230,14 @@ function validatePostDraft(post) {
   if (hashtags.length < 3 || hashtags.length > 5) {
     throw new Error('Draft failed format QA: include 3-5 relevant hashtags.');
   }
-  const beforeHashtags = text.replace(/(?:\\s+#[A-Za-z][A-Za-z0-9_]*)+\\s*$/g, '').trim();
+  const beforeHashtags = text.replace(/(?:\s+#[A-Za-z][A-Za-z0-9_]*)+\s*$/g, '').trim();
   if (!beforeHashtags.includes('?')) {
     throw new Error('Draft failed format QA: end the main text with a genuine discussion question before the hashtags.');
   }
-  if (/https?:\\/\\//i.test(text)) {
+  if (/https?:\/\//i.test(text)) {
     throw new Error('Draft failed format QA: do not add unverified or distracting URLs.');
   }
-  if (!/(?:source:\\s*coindesk)/i.test(text)) {
+  if (!/(?:source:\s*coindesk)/i.test(text)) {
     throw new Error('Draft failed format QA: include a brief Source: CoinDesk credit before the discussion question.');
   }
   return text;
